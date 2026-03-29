@@ -1,9 +1,12 @@
 local mq               = require('mq')
+local PackageMan       = require('mq.PackageMan')
+local SQLite3          = PackageMan.Require('lsqlite3')
 local btnUtils         = require('lib.buttonUtils')
 local BMButtonHandlers = require('bmButtonHandlers')
 
 local settings_base    = mq.configDir .. '/ButtonMaster'
-local settings_path    = settings_base .. '.lua '
+local settings_path    = settings_base .. '.lua'
+local dbPath           = settings_base .. '.db'
 
 
 local BMSettings                 = {}
@@ -13,7 +16,7 @@ BMSettings.CharConfig            = string.format("%s_%s", mq.TLO.EverQuest.Serve
 BMSettings.Constants             = {}
 
 BMSettings.Globals               = {}
-BMSettings.Globals.Version       = 7
+BMSettings.Globals.Version       = 8
 BMSettings.Globals.CustomThemes  = {}
 
 BMSettings.Constants.TimerTypes  = {
@@ -36,6 +39,122 @@ BMSettings.Constants.UpdateRates = {
 }
 
 
+function BMSettings:OpenDB()
+    local db = SQLite3.open(dbPath)
+    if not db then
+        btnUtils.Output('\arFailed to open ButtonMaster database!')
+        return nil
+    end
+    db:busy_timeout(2000)
+    db:exec('PRAGMA journal_mode=WAL;')
+    db:exec('PRAGMA foreign_keys = ON;')
+    return db
+end
+
+function BMSettings:InitDB()
+    local db = self:OpenDB()
+    if not db then return false end
+
+    db:exec([[
+        CREATE TABLE IF NOT EXISTS metadata (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS buttons (
+            button_key     TEXT PRIMARY KEY,
+            label          TEXT NOT NULL DEFAULT '',
+            cmd            TEXT NOT NULL DEFAULT '',
+            icon           TEXT,
+            icon_type      TEXT,
+            icon_lua       TEXT,
+            cooldown       TEXT,
+            timer_type     TEXT,
+            timer          TEXT,
+            toggle_check   TEXT,
+            button_color   TEXT,
+            text_color     TEXT,
+            show_label     INTEGER DEFAULT 1,
+            evaluate_label INTEGER DEFAULT 0,
+            update_rate    REAL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS sets (
+            set_name   TEXT NOT NULL,
+            position   INTEGER NOT NULL,
+            button_key TEXT NOT NULL,
+            PRIMARY KEY (set_name, position)
+        );
+
+        CREATE TABLE IF NOT EXISTS windows (
+            character_key  TEXT NOT NULL,
+            window_id      INTEGER NOT NULL,
+            visible        INTEGER NOT NULL DEFAULT 1,
+            locked         INTEGER NOT NULL DEFAULT 0,
+            hide_titlebar  INTEGER NOT NULL DEFAULT 0,
+            compact_mode   INTEGER NOT NULL DEFAULT 0,
+            adv_tooltips   INTEGER NOT NULL DEFAULT 1,
+            show_search    INTEGER NOT NULL DEFAULT 0,
+            per_char_pos   INTEGER NOT NULL DEFAULT 0,
+            hide_scrollbar INTEGER NOT NULL DEFAULT 0,
+            theme          TEXT,
+            font           INTEGER NOT NULL DEFAULT 10,
+            button_size    INTEGER NOT NULL DEFAULT 6,
+            fps            REAL NOT NULL DEFAULT 0,
+            pos_x          REAL NOT NULL DEFAULT 10,
+            pos_y          REAL NOT NULL DEFAULT 10,
+            width          REAL NOT NULL DEFAULT 500,
+            height         REAL NOT NULL DEFAULT 300,
+            PRIMARY KEY (character_key, window_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS window_sets (
+            character_key TEXT NOT NULL,
+            window_id     INTEGER NOT NULL,
+            position      INTEGER NOT NULL,
+            set_name      TEXT NOT NULL,
+            PRIMARY KEY (character_key, window_id, position),
+            FOREIGN KEY (character_key, window_id)
+                REFERENCES windows(character_key, window_id) ON DELETE CASCADE
+        );
+    ]])
+
+    db:exec('PRAGMA wal_checkpoint(TRUNCATE);')
+    db:close()
+    return true
+end
+
+function BMSettings:execDB(db, query, ...)
+    local stmt = db:prepare(query)
+    if not stmt then
+        btnUtils.Output('\arDB prepare error: %s\nQuery: %s', db:errmsg(), query)
+        return false
+    end
+    if select('#', ...) > 0 then
+        stmt:bind_values(...)
+    end
+    local rc = stmt:step()
+    stmt:finalize()
+    return rc
+end
+
+function BMSettings:queryDB(db, query, ...)
+    local stmt = db:prepare(query)
+    if not stmt then
+        btnUtils.Output('\arDB query error: %s', db:errmsg())
+        return {}
+    end
+    if select('#', ...) > 0 then
+        stmt:bind_values(...)
+    end
+    local rows = {}
+    for row in stmt:nrows() do
+        table.insert(rows, row)
+    end
+    stmt:finalize()
+    return rows
+end
+
 function BMSettings.new()
     local newSettings      = setmetatable({}, BMSettings)
     newSettings.CharConfig = string.format("%s_%s", mq.TLO.EverQuest.Server(), mq.TLO.Me.DisplayName())
@@ -52,22 +171,23 @@ end
 function BMSettings:SaveSettings(doBroadcast)
     if doBroadcast == nil then doBroadcast = true end
 
+    -- Daily backup (pickle to backups folder as safety net)
     if not self.settings.LastBackup or os.time() - self.settings.LastBackup > 3600 * 24 then
         self.settings.LastBackup = os.time()
         mq.pickle(mq.configDir .. "/Buttonmaster-Backups/ButtonMaster-backup-" .. os.date("%m-%d-%y-%H-%M-%S") .. ".lua",
             self.settings)
     end
 
-    mq.pickle(settings_path, self.settings)
+    -- Write to SQLite instead of pickle
+    self:writeAllToDB()
 
+    -- Inform others of changes so they can load them from the db
     if doBroadcast and mq.TLO.MacroQuest.GameState() == "INGAME" then
-        btnUtils.Output("\aySent Event from(\am%s\ay) event(\at%s\ay)", mq.TLO.Me.DisplayName(), "SaveSettings")
+        btnUtils.Output("\aySent Event from(\am%s\ay) event(\at%s\ay)", mq.TLO.Me.DisplayName(), "SettingsChanged")
         ButtonActors.send({
             from = mq.TLO.Me.DisplayName(),
             script = "ButtonMaster",
-            event = "SaveSettings",
-            newSettings =
-                self.settings,
+            event = "SettingsChanged",
         })
     end
 end
@@ -115,7 +235,7 @@ function BMSettings:GetCharConfig()
 end
 
 function BMSettings:GetButtonSectionKeyBySetIndex(Set, Index)
-    -- somehow an invalid set exists. Just make it empty.
+    -- an invalid set exists. Just make it empty.
     if not self.settings.Sets[Set] then
         self.settings.Sets[Set] = {}
         btnUtils.Debug("Set: %s does not exist. Creating it.", Set)
@@ -192,7 +312,16 @@ function BMSettings:ImportSetAndSave(sharableSet, windowId)
 end
 
 function BMSettings:ConvertToLatestConfigVersion()
-    self:LoadSettings()
+    -- Load from the old .lua file directly (avoid LoadSettings which would trigger DB migration)
+    if not self.settings or not next(self.settings) then
+        local config, err = loadfile(settings_path)
+        if not err and config then
+            self.settings = config()
+        else
+            btnUtils.Output('\arNo config to upgrade!')
+            return
+        end
+    end
     local needsSave = false
     local newSettings = {}
 
@@ -360,61 +489,322 @@ function BMSettings:ConvertToLatestConfigVersion()
 end
 
 function BMSettings:InvalidateButtonCache()
-    for _, button in pairs(self.settings.Buttons) do
+    for _, button in pairs(self.settings.Buttons or {}) do
         button.CachedLabel = nil
     end
 end
 
-function BMSettings:LoadSettings()
-    local config, err = loadfile(settings_path)
-    if err or not config then
-        local old_settings_path = settings_path:gsub(".lua", ".ini")
-        printf("\ayUnable to load global settings file(%s), creating a new one from legacy ini(%s) file!",
-            settings_path, old_settings_path)
-        if btnUtils.file_exists(old_settings_path) then
-            self.settings = btnUtils.loadINI(old_settings_path)
-            self:SaveSettings(true)
-        else
-            printf("\ayUnable to load legacy settings file(%s), creating a new config!", old_settings_path)
-            self.settings = {
-                Version = BMSettings.Globals.Version,
-                Sets = {
-                    ['Primary'] = { 'Button_1', 'Button_2', 'Button_3', },
-                    ['Movement'] = { 'Button_4', },
-                },
-                Buttons = {
-                    Button_1 = {
-                        Label = 'Burn (all)',
-                        Cmd = '/bcaa //burn\n/timed 500 /bcaa //burn',
-                    },
-                    Button_2 = {
-                        Label = 'Pause (all)',
-                        Cmd = '/bcaa //multi ; /twist off ; /mqp on',
-                    },
-                    Button_3 = {
-                        Label = 'Unpause (all)',
-                        Cmd = '/bcaa //mqp off',
-                    },
-                    Button_4 = {
-                        Label = 'Nav Target (bca)',
-                        Cmd = '/bca //nav id ${Target.ID}',
-                    },
-                },
-                Characters = {
-                    [self.CharConfig] = {
-                        Windows = { [1] = { Visible = true, Pos = { x = 10, y = 10, }, Sets = {}, Locked = false, }, },
-                    },
-                },
-            }
-            self:SaveSettings(true)
+function BMSettings:writeAllToDB()
+    local db = self:OpenDB()
+    if not db then return false end
+
+    local ok, err = pcall(function()
+        db:exec('BEGIN TRANSACTION')
+
+        -- Clear all tables note:order matters for foreign keys
+        db:exec('DELETE FROM window_sets')
+        db:exec('DELETE FROM windows')
+        db:exec('DELETE FROM sets')
+        db:exec('DELETE FROM buttons')
+
+        -- Write buttons
+        local btnStmt = db:prepare([[
+            INSERT INTO buttons (button_key, label, cmd, icon, icon_type, icon_lua,
+                cooldown, timer_type, timer, toggle_check, button_color, text_color,
+                show_label, evaluate_label, update_rate)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ]])
+        if not btnStmt then error('Failed to prepare buttons insert: ' .. (db:errmsg() or 'unknown')) end
+        for key, btn in pairs(self.settings.Buttons or {}) do
+            if not btn.Unassigned then
+                btnStmt:bind_values(
+                    key,
+                    btn.Label or '',
+                    btn.Cmd or '',
+                    btn.Icon and tostring(btn.Icon) or nil,
+                    btn.IconType,
+                    btn.IconLua,
+                    btn.Cooldown and tostring(btn.Cooldown) or nil,
+                    btn.TimerType,
+                    btn.Timer,
+                    btn.ToggleCheck,
+                    btn.ButtonColorRGB,
+                    btn.TextColorRGB,
+                    (btn.ShowLabel == nil or btn.ShowLabel) and 1 or 0,
+                    btn.EvaluateLabel and 1 or 0,
+                    btn.UpdateRate or 0
+                )
+                btnStmt:step()
+                btnStmt:reset()
+            end
         end
-    else
-        self.settings = config()
+        btnStmt:finalize()
+
+        -- Write sets
+        local setStmt = db:prepare('INSERT INTO sets (set_name, position, button_key) VALUES (?, ?, ?)')
+        if not setStmt then error('Failed to prepare sets insert: ' .. (db:errmsg() or 'unknown')) end
+        for setName, buttons in pairs(self.settings.Sets or {}) do
+            for pos, buttonKey in ipairs(buttons) do
+                setStmt:bind_values(setName, pos, buttonKey)
+                setStmt:step()
+                setStmt:reset()
+            end
+        end
+        setStmt:finalize()
+
+        -- Write windows and window_sets
+        local winStmt = db:prepare([[
+            INSERT INTO windows (character_key, window_id, visible, locked, hide_titlebar,
+                compact_mode, adv_tooltips, show_search, per_char_pos, hide_scrollbar,
+                theme, font, button_size, fps, pos_x, pos_y, width, height)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ]])
+        if not winStmt then error('Failed to prepare windows insert: ' .. (db:errmsg() or 'unknown')) end
+        local wsStmt = db:prepare('INSERT INTO window_sets (character_key, window_id, position, set_name) VALUES (?, ?, ?, ?)')
+        if not wsStmt then error('Failed to prepare window_sets insert: ' .. (db:errmsg() or 'unknown')) end
+
+        for charKey, charData in pairs(self.settings.Characters or {}) do
+            for winId, win in ipairs(charData.Windows or {}) do
+                winStmt:bind_values(
+                    charKey, winId,
+                    win.Visible and 1 or 0,
+                    win.Locked and 1 or 0,
+                    win.HideTitleBar and 1 or 0,
+                    win.CompactMode and 1 or 0,
+                    (win.AdvTooltips == nil or win.AdvTooltips) and 1 or 0,
+                    win.ShowSearch and 1 or 0,
+                    win.PerCharacterPositioning and 1 or 0,
+                    win.HideScrollbar and 1 or 0,
+                    win.Theme,
+                    win.Font or 10,
+                    win.ButtonSize or 6,
+                    win.FPS or 0,
+                    win.Pos and win.Pos.x or 10,
+                    win.Pos and win.Pos.y or 10,
+                    win.Width or 500,
+                    win.Height or 300
+                )
+                winStmt:step()
+                winStmt:reset()
+
+                for pos, setName in ipairs(win.Sets or {}) do
+                    wsStmt:bind_values(charKey, winId, pos, setName)
+                    wsStmt:step()
+                    wsStmt:reset()
+                end
+            end
+        end
+        winStmt:finalize()
+        wsStmt:finalize()
+
+        -- Update metadata
+        self:execDB(db, 'INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)',
+            'schema_version', tostring(BMSettings.Globals.Version))
+        self:execDB(db, 'INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)',
+            'last_backup', tostring(self.settings.LastBackup or 0))
+
+        db:exec('COMMIT')
+    end)
+
+    if not ok then
+        btnUtils.Output('\arDB write error: %s', tostring(err))
+        db:exec('ROLLBACK')
+        db:close()
+        return false
     end
 
-    -- if we need to upgrade anyway then bail after the load.
-    if self:NeedUpgrade() then return false end
+    db:close()
+    return true
+end
 
+function BMSettings:retrieveDataFromDB()
+    local db = self:OpenDB()
+    if not db then return false end
+
+    local settings = {
+        Version = BMSettings.Globals.Version,
+        Buttons = {},
+        Sets = {},
+        Characters = {},
+    }
+
+    -- Load metadata
+    local metaRows = self:queryDB(db, 'SELECT key, value FROM metadata')
+    for _, row in ipairs(metaRows) do
+        if row.key == 'schema_version' then
+            settings.Version = tonumber(row.value) or BMSettings.Globals.Version
+        elseif row.key == 'last_backup' then
+            settings.LastBackup = tonumber(row.value) or 0
+        end
+    end
+
+    -- Load buttons
+    local btnRows = self:queryDB(db, 'SELECT * FROM buttons')
+    for _, row in ipairs(btnRows) do
+        settings.Buttons[row.button_key] = {
+            Label = row.label or '',
+            Cmd = row.cmd or '',
+            Icon = row.icon,
+            IconType = row.icon_type,
+            IconLua = row.icon_lua,
+            Cooldown = row.cooldown,
+            TimerType = row.timer_type,
+            Timer = row.timer,
+            ToggleCheck = row.toggle_check,
+            ButtonColorRGB = row.button_color,
+            TextColorRGB = row.text_color,
+            ShowLabel = row.show_label == 1,
+            EvaluateLabel = row.evaluate_label == 1,
+            UpdateRate = row.update_rate or 0,
+        }
+    end
+
+    -- Load sets
+    local setRows = self:queryDB(db, 'SELECT set_name, position, button_key FROM sets ORDER BY set_name, position')
+    for _, row in ipairs(setRows) do
+        settings.Sets[row.set_name] = settings.Sets[row.set_name] or {}
+        settings.Sets[row.set_name][row.position] = row.button_key
+    end
+
+    -- Load windows
+    local winRows = self:queryDB(db, 'SELECT * FROM windows ORDER BY character_key, window_id')
+    for _, row in ipairs(winRows) do
+        settings.Characters[row.character_key] = settings.Characters[row.character_key] or { Windows = {}, }
+        settings.Characters[row.character_key].Windows[row.window_id] = {
+            Visible = row.visible == 1,
+            Locked = row.locked == 1,
+            HideTitleBar = row.hide_titlebar == 1,
+            CompactMode = row.compact_mode == 1,
+            AdvTooltips = row.adv_tooltips == 1,
+            ShowSearch = row.show_search == 1,
+            PerCharacterPositioning = row.per_char_pos == 1,
+            HideScrollbar = row.hide_scrollbar == 1,
+            Theme = row.theme,
+            Font = row.font or 10,
+            ButtonSize = row.button_size or 6,
+            FPS = row.fps or 0,
+            Pos = { x = row.pos_x or 10, y = row.pos_y or 10, },
+            Width = row.width or 500,
+            Height = row.height or 300,
+            Sets = {},
+        }
+    end
+
+    -- Load window_sets
+    local wsRows = self:queryDB(db, 'SELECT * FROM window_sets ORDER BY character_key, window_id, position')
+    for _, row in ipairs(wsRows) do
+        if settings.Characters[row.character_key] and
+            settings.Characters[row.character_key].Windows[row.window_id] then
+            settings.Characters[row.character_key].Windows[row.window_id].Sets[row.position] = row.set_name
+        end
+    end
+
+    db:close()
+    self.settings = settings
+    return true
+end
+
+function BMSettings:migrateToDatabase()
+    btnUtils.Output('\ayMigrating ButtonMaster config to SQLite database...')
+    if not self:InitDB() then return false end
+    if not self:writeAllToDB() then return false end
+
+    -- Rename old file as backup
+    if btnUtils.file_exists(settings_path) then
+        os.rename(settings_path, settings_path .. '.bak')
+        btnUtils.Output('\agRenamed old config to %s.bak', settings_path)
+    end
+
+    btnUtils.Output('\agButtonMaster config migrated to SQLite successfully!')
+    return true
+end
+
+function BMSettings:HasDBData()
+    -- Check file exists first to avoid creating an empty .db file
+    local f = io.open(dbPath, 'r')
+    if not f then return false end
+    f:close()
+    local db = self:OpenDB()
+    if not db then return false end
+    local rows = self:queryDB(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='buttons'")
+    db:close()
+    return #rows > 0
+end
+
+function BMSettings:LoadSettings()
+    -- DB first: if database exists, load from it
+    if self:HasDBData() then
+        self:InitDB()
+        self:retrieveDataFromDB()
+        goto settings_loaded
+    end
+
+    -- Fallback: try to load old .lua config and migrate
+    do
+        local config, err = loadfile(settings_path)
+        if not err and config then
+            self.settings = config()
+
+            -- Run version upgrades if needed (v2 through v7)
+            if (self.settings.Version or 0) < 7 then
+                self:ConvertToLatestConfigVersion()
+            end
+
+            -- Migrate to SQLite
+            self.settings.Version = BMSettings.Globals.Version
+            self:migrateToDatabase()
+            goto settings_loaded
+        end
+
+        -- Try legacy .ini format
+        local old_settings_path = settings_path:gsub(".lua", ".ini")
+        if btnUtils.file_exists(old_settings_path) then
+            printf("\ayLoading legacy ini config and migrating to SQLite...")
+            self.settings = btnUtils.loadINI(old_settings_path)
+            self.settings.Version = BMSettings.Globals.Version
+            self:migrateToDatabase()
+            goto settings_loaded
+        end
+
+        -- Fresh install - create defaults
+        printf("\ayNo existing config found, creating fresh ButtonMaster database.")
+        self.settings = {
+            Version = BMSettings.Globals.Version,
+            Sets = {
+                ['Primary'] = { 'Button_1', 'Button_2', 'Button_3', },
+                ['Movement'] = { 'Button_4', },
+            },
+            Buttons = {
+                Button_1 = {
+                    Label = 'Burn (all)',
+                    Cmd = '/bcaa //burn\n/timed 500 /bcaa //burn',
+                },
+                Button_2 = {
+                    Label = 'Pause (all)',
+                    Cmd = '/bcaa //multi ; /twist off ; /mqp on',
+                },
+                Button_3 = {
+                    Label = 'Unpause (all)',
+                    Cmd = '/bcaa //mqp off',
+                },
+                Button_4 = {
+                    Label = 'Nav Target (bca)',
+                    Cmd = '/bca //nav id ${Target.ID}',
+                },
+            },
+            Characters = {
+                [self.CharConfig] = {
+                    Windows = { [1] = { Visible = true, Pos = { x = 10, y = 10, }, Sets = {}, Locked = false, }, },
+                },
+            },
+        }
+        self:InitDB()
+        self:writeAllToDB()
+    end
+
+    ::settings_loaded::
+
+    -- Ensure this character has a config entry with at least one window
     self.settings.Characters[self.CharConfig] = self.settings.Characters[self.CharConfig] or {}
     self.settings.Characters[self.CharConfig].Windows = self.settings.Characters[self.CharConfig].Windows or
         { [1] = { Visible = true, Pos = { x = 10, y = 10, }, Sets = {}, Locked = false, }, }
