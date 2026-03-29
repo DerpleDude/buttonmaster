@@ -544,10 +544,12 @@ function BMSettings:writeAllToDB()
         local setStmt = db:prepare('INSERT INTO sets (set_name, position, button_key) VALUES (?, ?, ?)')
         if not setStmt then error('Failed to prepare sets insert: ' .. (db:errmsg() or 'unknown')) end
         for setName, buttons in pairs(self.settings.Sets or {}) do
-            for pos, buttonKey in ipairs(buttons) do
-                setStmt:bind_values(setName, pos, buttonKey)
-                setStmt:step()
-                setStmt:reset()
+            for pos, buttonKey in pairs(buttons) do
+                if type(pos) == 'number' and buttonKey then
+                    setStmt:bind_values(setName, pos, buttonKey)
+                    setStmt:step()
+                    setStmt:reset()
+                end
             end
         end
         setStmt:finalize()
