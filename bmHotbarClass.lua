@@ -35,6 +35,7 @@ BMHotbarClass.importText            = ""
 BMHotbarClass.decodedObject         = {}
 
 BMHotbarClass.newSetName            = ""
+BMHotbarClass.windowTitleEdit       = ""
 BMHotbarClass.currentSelectedSet    = 0
 
 BMHotbarClass.lastFrameTime         = 0
@@ -249,10 +250,11 @@ function BMHotbarClass:RenderHotbar(flags)
     end
 
     local colorPop, stylePop = self:StartTheme()
-    local renderName = string.format('Button Master - %d', self.id)
+    local windowTitle = BMSettings:GetCharacterWindow(self.id).Title or string.format('Button Master - %d', self.id)
+    local renderName  = windowTitle
 
     if self:PerCharacterPositioning() then
-        renderName = renderName .. "##" .. mq.TLO.EverQuest.Server() .. "_" .. mq.TLO.Me.Name()
+        renderName = windowTitle .. "##" .. mq.TLO.EverQuest.Server() .. "_" .. mq.TLO.Me.Name()
     end
 
     ImGui.PushID("##MainWindow_" .. tostring(self.id))
@@ -653,6 +655,17 @@ function BMHotbarClass:RenderTabContextMenu()
                 },
             }
 
+            ImGui.Separator()
+            ImGui.Text("Window Name:")
+            local titleTmp, titleChanged = ImGui.InputText("##winTitle_" .. self.id, self.windowTitleEdit, 0)
+            if titleChanged then self.windowTitleEdit = titleTmp end
+            if ImGui.Button("Rename##winRename_" .. self.id) then
+                local newTitle = self.windowTitleEdit:len() > 0 and self.windowTitleEdit or nil
+                BMSettings:GetCharacterWindow(self.id).Title = newTitle
+                BMSettings:SaveSettings(true)
+                self.windowTitleEdit = ""
+            end
+
             if ImGui.BeginMenu("Update FPS") then
                 for _, v in ipairs(fps_scale) do
                     local checked = BMSettings:GetCharacterWindow(self.id).FPS == v.fps
@@ -684,7 +697,8 @@ function BMHotbarClass:RenderTabContextMenu()
 
         if ImGui.BeginMenu("Show/Hide Hotbar") then
             for hbIdx, hotbarClass in ipairs(BMHotbars) do
-                if ImGui.MenuItem(string.format("Button Master - %d", hbIdx), nil, hotbarClass:IsVisible()) then
+                local hbTitle = BMSettings:GetCharacterWindow(hbIdx).Title or string.format("Button Master - %d", hbIdx)
+                if ImGui.MenuItem(hbTitle, nil, hotbarClass:IsVisible()) then
                     hotbarClass:ToggleVisible()
                 end
             end
