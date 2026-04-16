@@ -35,6 +35,7 @@ BMHotbarClass.importText            = ""
 BMHotbarClass.decodedObject         = {}
 
 BMHotbarClass.newSetName            = ""
+BMHotbarClass.editingLabel          = ""
 BMHotbarClass.windowTitleEdit       = ""
 BMHotbarClass.currentSelectedSet    = 0
 
@@ -101,9 +102,13 @@ function BMHotbarClass.new(id, createFresh)
         end,
         function(label, idx)
             -- Rename popup injected into each tab's context menu.
+            if newBMHotbar.editingLabel ~= label then
+                newBMHotbar.editingLabel = label
+                newBMHotbar.newSetName   = label
+            end
             ImGui.Text("Edit Name:")
-            local tmp, changed = ImGui.InputText("##bmtab_edit_" .. id, label, 0)
-            if changed or newBMHotbar.newSetName:len() == 0 then newBMHotbar.newSetName = tmp end
+            local tmp, changed = ImGui.InputText("##bmtab_edit_" .. id, newBMHotbar.newSetName, 0)
+            if changed then newBMHotbar.newSetName = tmp end
             if ImGui.Button("Save##bmtab_save_" .. id) then
                 local newName = newBMHotbar.newSetName
                 if newName and newName:len() > 0 and newName ~= label then
@@ -123,6 +128,8 @@ function BMHotbarClass.new(id, createFresh)
                     newBMHotbar.tabBar:RenameTab(label, newName)
                     BMSettings:SaveSettings(true)
                 end
+                newBMHotbar.editingLabel = ""
+                newBMHotbar.newSetName   = ""
                 ImGui.CloseCurrentPopup()
             end
         end
