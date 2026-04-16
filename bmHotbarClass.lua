@@ -3,6 +3,7 @@ local Set                           = require('mq.Set')
 local btnUtils                      = require('lib.buttonUtils')
 local BMButtonHandlers              = require('bmButtonHandlers')
 local themes                        = require('extras.themes')
+local BMTab                         = require('bmTab')
 
 local WINDOW_SETTINGS_ICON_SIZE     = 22
 
@@ -49,6 +50,7 @@ BMHotbarClass.newY                  = 0
 BMHotbarClass.searchText            = ""
 
 BMHotbarClass.currentDnDData        = nil
+BMHotbarClass.tabBar                = nil
 
 BMHotbarClass.alphaMenu             = {
     { name = "A-D",   filter = function(i) return i >= "A" and i <= "D" end, items = {}, },
@@ -88,6 +90,42 @@ function BMHotbarClass.new(id, createFresh)
     end
 
     BMSettings:GetCharConfig().Windows[id].Sets = BMSettings:GetCharConfig().Windows[id].Sets or {}
+
+    newBMHotbar.tabBar = BMTab.new(
+        tostring(id),
+        BMSettings:GetCharacterWindowSets(id),
+        function(newLabels)
+            BMSettings:GetCharConfig().Windows[id].Sets = newLabels
+            BMSettings:SaveSettings(true)
+        end,
+        function(label, idx)
+            -- Rename popup injected into each tab's context menu.
+            ImGui.Text("Edit Name:")
+            local tmp, changed = ImGui.InputText("##bmtab_edit_" .. id, label, 0)
+            if changed or newBMHotbar.newSetName:len() == 0 then newBMHotbar.newSetName = tmp end
+            if ImGui.Button("Save##bmtab_save_" .. id) then
+                local newName = newBMHotbar.newSetName
+                if newName and newName:len() > 0 and newName ~= label then
+                    -- Rename in global Sets table.
+                    BMSettings:GetSettings().Sets[newName] = BMSettings:GetSettings().Sets[label]
+                    BMSettings:GetSettings().Sets[label]   = nil
+                    -- Update all characters that reference this set name.
+                    for curCharKey, curCharData in pairs(BMSettings:GetSettings().Characters) do
+                        for windowIdx, windowData in ipairs(curCharData.Windows or {}) do
+                            for setIdx, oldSetName in ipairs(windowData.Sets or {}) do
+                                if oldSetName == label then
+                                    BMSettings:GetSettings().Characters[curCharKey].Windows[windowIdx].Sets[setIdx] = newName
+                                end
+                            end
+                        end
+                    end
+                    newBMHotbar.tabBar:RenameTab(label, newName)
+                    BMSettings:SaveSettings(true)
+                end
+                ImGui.CloseCurrentPopup()
+            end
+        end
+    )
 
     return newBMHotbar
 end
@@ -318,68 +356,24 @@ function BMHotbarClass:RenderTabs()
         self:RenderTabContextMenu()
         self:RenderCreateTab()
 
-        if ImGui.BeginTabBar("Tabs", ImGuiTabBarFlags.Reorderable) then
-            if (#BMSettings:GetCharacterWindowSets(self.id) or 0) > 0 then
-                for i, set in ipairs(BMSettings:GetCharacterWindowSets(self.id)) do
-                    if ImGui.BeginTabItem(set) then
-                        SetLabel = set
-                        self.currentSelectedSet = i
+        -- Sync tab bar labels in case sets were added/removed via context menu.
+        self.tabBar:SetLabels(BMSettings:GetCharacterWindowSets(self.id))
 
-                        -- tab edit popup
-                        if ImGui.BeginPopupContextItem(set) then
-                            ImGui.Text("Edit Name:")
-                            local tmp, changed = ImGui.InputText("##edit", set, 0)
-                            if changed or self.newSetName:len() == 0 then self.newSetName = tmp end
-                            if ImGui.Button("Save") then
-                                BMEditPopup:CloseEditPopup()
-                                local newSetLabel = self.newSetName
-                                if self.newSetName ~= nil then
-                                    BMSettings:GetCharacterWindowSets(self.id)[i] = self.newSetName
+        local selectedLabel, selectedIdx = self.tabBar:Render()
 
-                                    -- move the old button set to the new name
-                                    BMSettings:GetSettings().Sets[newSetLabel], BMSettings:GetSettings().Sets[SetLabel] =
-                                        BMSettings:GetSettings().Sets[SetLabel], nil
-
-                                    -- update the character button set name
-                                    for curCharKey, curCharData in pairs(BMSettings:GetSettings().Characters) do
-                                        for windowIdx, windowData in ipairs(curCharData.Windows or {}) do
-                                            for setIdx, oldSetName in ipairs(windowData.Sets or {}) do
-                                                if oldSetName == set then
-                                                    btnUtils.Output(string.format(
-                                                        "\awUpdating section '\ag%s\aw' renaming \am%s\aw => \at%s",
-                                                        curCharKey,
-                                                        oldSetName, self.newSetName))
-                                                    BMSettings:GetSettings().Characters[curCharKey].Windows[windowIdx].Sets[setIdx] =
-                                                        self.newSetName
-                                                end
-                                            end
-                                        end
-                                    end
-
-                                    -- update set to the new name so the button render doesn't fail
-                                    SetLabel = newSetLabel
-                                    BMSettings:SaveSettings(true)
-                                end
-                                ImGui.CloseCurrentPopup()
-                            end
-                            ImGui.EndPopup()
-                        end
-                        if BMSettings:GetCharacterWindow(self.id).ShowSearch then
-                            ImGui.Text("Search")
-                            ImGui.SameLine()
-                            self.searchText = ImGui.InputText("##SearchText", self.searchText, ImGuiInputTextFlags.None)
-                        else
-                            self.searchText = ""
-                        end
-                        self:RenderButtons(SetLabel, self.searchText)
-                        ImGui.EndTabItem()
-                    end
-                end
+        if selectedLabel and selectedIdx then
+            self.currentSelectedSet = selectedIdx
+            if BMSettings:GetCharacterWindow(self.id).ShowSearch then
+                ImGui.Text("Search")
+                ImGui.SameLine()
+                self.searchText = ImGui.InputText("##SearchText", self.searchText, ImGuiInputTextFlags.None)
+            else
+                self.searchText = ""
             end
+            self:RenderButtons(selectedLabel, self.searchText)
         else
             ImGui.Text(string.format("No Sets Added! Add one by right-clicking on %s", Icons.MD_SETTINGS))
         end
-        ImGui.EndTabBar()
     end
 end
 
