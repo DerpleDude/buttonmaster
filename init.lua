@@ -176,9 +176,10 @@ local script_actor = ButtonActors.register(function(message)
 
     btnUtils.Output("\ayGot Event from(\am%s\ay) event(\at%s\ay)", msg["from"], msg["event"])
 
-    if msg["event"] == "SaveSettings" then
-        btnUtils.Debug("Got new settings:\n%s", btnUtils.dumpTable(msg.newSettings))
-        BMSettings.settings = msg.newSettings
+    if msg["event"] == "SettingsChanged" or msg["event"] == "SaveSettings" then
+        -- Defer reload to main loop to avoid racing with GiveTime
+        BMReloadSettings = true
+        BMUpdateSettings = true
     elseif msg["event"] == "CopyLoc" then
         if msg.windowId <= #BMHotbars then
             BMHotbars[msg.windowId]:UpdatePosition((tonumber(msg["width"]) or 100), (tonumber(msg["height"]) or 100), (tonumber(msg["x"]) or 0), (tonumber(msg["y"]) or 0),
