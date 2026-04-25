@@ -1,12 +1,24 @@
-local mq                = require('mq')
-local base64            = require('lib.base64')
+local mq                    = require('mq')
+local base64                = require('lib.base64')
 
-local ButtonUtils       = {}
-ButtonUtils.__index     = ButtonUtils
-ButtonUtils.enableDebug = false
+local ButtonUtils           = {}
+ButtonUtils.__index         = ButtonUtils
+ButtonUtils.enableDebug     = false
+ButtonUtils.State           = {}
+ButtonUtils.CharStateConfig = mq.configDir .. "/ButtonMaster/" .. string.format("%s_%s", mq.TLO.EverQuest.Server(), mq.TLO.Me.DisplayName()) .. "_state.lua"
 
 function ButtonUtils.PCallString(str)
-    local func, err = load(str)
+    local locals    = setmetatable({}, { __index = _G, })
+    locals.mq       = setmetatable({}, { __index = mq, })
+    locals._State   = setmetatable({}, {
+        __index = ButtonUtils.State,
+        __newindex = function(_, k, v)
+            ButtonUtils.State[k] = v
+            ButtonUtils.SaveState()
+        end,
+    })
+
+    local func, err = load(str, "BMLuaScript", "t", locals)
     if not func then
         ButtonUtils.Output(err)
         return false, err
@@ -15,11 +27,19 @@ function ButtonUtils.PCallString(str)
     return pcall(func)
 end
 
+function ButtonUtils.SaveState()
+    mq.pickle(ButtonUtils.CharStateConfig, ButtonUtils.State)
+end
+
+function ButtonUtils.LoadState()
+    local state, state_err = loadfile(ButtonUtils.CharStateConfig)
+    if not state_err and state then
+        ButtonUtils.State = state()
+    end
+end
+
 function ButtonUtils.EvaluateLua(str)
-    local runEnv = [[mq = require('mq')
-        %s
-        ]]
-    return ButtonUtils.PCallString(string.format(runEnv, str))
+    return ButtonUtils.PCallString(str)
 end
 
 function ButtonUtils.serializeTable(val, name, skipnewlines, depth)

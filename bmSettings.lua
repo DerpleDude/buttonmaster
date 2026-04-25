@@ -46,6 +46,8 @@ function BMSettings.new()
         BMSettings.Globals.CustomThemes = config()
     end
 
+    btnUtils.LoadState()
+
     return newSettings
 end
 
