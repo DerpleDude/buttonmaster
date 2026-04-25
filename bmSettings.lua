@@ -47,6 +47,7 @@ function BMSettings.new()
     end
 
     btnUtils.LoadState()
+    btnUtils.LoadGlobalState()
 
     return newSettings
 end

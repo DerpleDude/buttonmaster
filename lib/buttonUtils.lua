@@ -1,24 +1,33 @@
-local mq                    = require('mq')
-local base64                = require('lib.base64')
+local mq                      = require('mq')
+local base64                  = require('lib.base64')
 
-local ButtonUtils           = {}
-ButtonUtils.__index         = ButtonUtils
-ButtonUtils.enableDebug     = false
-ButtonUtils.State           = {}
-ButtonUtils.CharStateConfig = mq.configDir .. "/ButtonMaster/" .. string.format("%s_%s", mq.TLO.EverQuest.Server(), mq.TLO.Me.DisplayName()) .. "_state.lua"
+local ButtonUtils             = {}
+ButtonUtils.__index           = ButtonUtils
+ButtonUtils.enableDebug       = false
+ButtonUtils.State             = {}
+ButtonUtils.GlobalState       = {}
+ButtonUtils.CharStateConfig   = mq.configDir .. "/ButtonMaster/" .. string.format("%s_%s", mq.TLO.EverQuest.Server(), mq.TLO.Me.DisplayName()) .. "_state.lua"
+ButtonUtils.GlobalStateConfig = mq.configDir .. "/ButtonMaster/" .. "Global_state.lua"
 
 function ButtonUtils.PCallString(str)
-    local locals    = setmetatable({}, { __index = _G, })
-    locals.mq       = setmetatable({}, { __index = mq, })
-    locals._State   = setmetatable({}, {
+    local locals        = setmetatable({}, { __index = _G, })
+    locals.mq           = setmetatable({}, { __index = mq, })
+    locals._State       = setmetatable({}, {
         __index = ButtonUtils.State,
         __newindex = function(_, k, v)
             ButtonUtils.State[k] = v
             ButtonUtils.SaveState()
         end,
     })
+    locals._GlobalState = setmetatable({}, {
+        __index = ButtonUtils.GlobalState,
+        __newindex = function(_, k, v)
+            ButtonUtils.GlobalState[k] = v
+            ButtonUtils.SaveGlobalState()
+        end,
+    })
 
-    local func, err = load(str, "BMLuaScript", "t", locals)
+    local func, err     = load(str, "BMLuaScript", "t", locals)
     if not func then
         ButtonUtils.Output(err)
         return false, err
@@ -29,6 +38,23 @@ end
 
 function ButtonUtils.SaveState()
     mq.pickle(ButtonUtils.CharStateConfig, ButtonUtils.State)
+end
+
+function ButtonUtils.SaveGlobalState()
+    mq.pickle(ButtonUtils.GlobalStateConfig, ButtonUtils.GlobalState)
+    ButtonActors.send({
+        from = mq.TLO.Me.DisplayName(),
+        script = "ButtonMaster",
+        event = "NewGlobalState",
+        newState = ButtonUtils.GlobalState,
+    })
+end
+
+function ButtonUtils.LoadGlobalState()
+    local state, state_err = loadfile(ButtonUtils.GlobalStateConfig)
+    if not state_err and state then
+        ButtonUtils.GlobalState = state()
+    end
 end
 
 function ButtonUtils.LoadState()

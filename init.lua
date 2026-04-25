@@ -179,6 +179,9 @@ local script_actor = ButtonActors.register(function(message)
     if msg["event"] == "SaveSettings" then
         btnUtils.Debug("Got new settings:\n%s", btnUtils.dumpTable(msg.newSettings))
         BMSettings.settings = msg.newSettings
+    elseif msg["event"] == "NewGlobalState" then
+        btnUtils.Debug("Got new NewGlobalState:\n%s", btnUtils.dumpTable(msg.newState))
+        btnUtils.GlobalState = msg.newState
     elseif msg["event"] == "CopyLoc" then
         if msg.windowId <= #BMHotbars then
             BMHotbars[msg.windowId]:UpdatePosition((tonumber(msg["width"]) or 100), (tonumber(msg["height"]) or 100), (tonumber(msg["x"]) or 0), (tonumber(msg["y"]) or 0),
