@@ -963,6 +963,17 @@ function BMHotbarClass:RenderButtons(Set, searchText)
                             btnUtils.Output("\arError: Failed to decode dropped button payload :: %s!\ax", payload.Data or "nil")
                         end
                     end
+
+                    local rgmercsPayload = ImGui.AcceptDragDropPayload("RGMERCS_BUTTON")
+                    if rgmercsPayload ~= nil then
+                        local success, sharableButton = btnUtils.decodeTable(rgmercsPayload.Data)
+                        if success and type(sharableButton) == 'table' and sharableButton.Type == "Button" then
+                            BMSettings:GetSettings().Sets[Set][ButtonIndex] = BMSettings:ImportButtonAndSave(sharableButton.Button, false)
+                            BMSettings:SaveSettings(true)
+                        else
+                            btnUtils.Output("\arError: Failed to decode dropped RGMercs button!\ax")
+                        end
+                    end
                     ImGui.EndDragDropTarget()
                 end
 
