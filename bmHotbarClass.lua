@@ -258,10 +258,10 @@ function BMHotbarClass:RenderHotbar(flags)
 
     local colorPop, stylePop = self:StartTheme()
     local windowTitle = BMSettings:GetCharacterWindow(self.id).Title or string.format('Button Master - %d', self.id)
-    local renderName  = windowTitle
+    local renderName  = windowTitle .. "###ButtonMaster_" .. tostring(self.id)
 
     if self:PerCharacterPositioning() then
-        renderName = windowTitle .. "##" .. mq.TLO.EverQuest.Server() .. "_" .. mq.TLO.Me.Name()
+        renderName = renderName .. "_" .. mq.TLO.EverQuest.Server() .. "_" .. mq.TLO.Me.Name()
     end
 
     ImGui.PushID("##MainWindow_" .. tostring(self.id))
