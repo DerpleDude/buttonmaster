@@ -65,6 +65,12 @@ BMHotbarClass.alphaMenu             = {
     { name = "0-9",   filter = function(i) return i >= "0" and i <= "9" end, items = {}, },
     { name = "Other", filter = function(i) return true end,                  items = {}, }, }
 
+-- colors faded by the title bar & tabs opacity slider (missing names are skipped)
+BMHotbarClass.titleTabColors        = {
+    "TitleBg", "TitleBgActive", "TitleBgCollapsed",
+    "Tab", "TabHovered", "TabSelected", "TabSelectedOverline",
+    "TabDimmed", "TabDimmedSelected", "TabDimmedSelectedOverline", }
+
 
 function BMHotbarClass.new(id, createFresh)
     local newBMHotbar = setmetatable({ id = id, }, BMHotbarClass)
@@ -258,20 +264,47 @@ function BMHotbarClass:RenderHotbar(flags)
 
     local colorPop, stylePop = self:StartTheme()
     local windowTitle = BMSettings:GetCharacterWindow(self.id).Title or string.format('Button Master - %d', self.id)
+    -- "###" gives ImGui a stable window ID that ignores the visible title, so renaming
+    -- a window no longer creates a new ImGui window at the default position/size.
     local renderName  = windowTitle .. "###ButtonMaster_" .. tostring(self.id)
 
     if self:PerCharacterPositioning() then
         renderName = renderName .. "_" .. mq.TLO.EverQuest.Server() .. "_" .. mq.TLO.Me.Name()
     end
 
+    local bgOpacity = BMSettings:GetCharacterWindow(self.id).Opacity
+    if bgOpacity and bgOpacity < 1 then
+        ImGui.SetNextWindowBgAlpha(bgOpacity)
+    end
+
+    -- fade the title bar and tabs, starting from whatever color the theme set
+    local barColorPop = 0
+    local barOpacity = BMSettings:GetCharacterWindow(self.id).TitleTabOpacity
+    if barOpacity and barOpacity < 1 then
+        for _, colName in ipairs(self.titleTabColors) do
+            local col = ImGuiCol[colName]
+            if col then
+                local c = ImGui.GetStyleColorVec4(col)
+                ImGui.PushStyleColor(col, c.x, c.y, c.z, c.w * barOpacity)
+                barColorPop = barColorPop + 1
+            end
+        end
+    end
+
     ImGui.PushID("##MainWindow_" .. tostring(self.id))
     self.openGUI, self.shouldDrawGUI = ImGui.Begin(renderName, self.openGUI,
         bit32.bor(flags))
 
-    if not ImGui.IsMouseDown(ImGuiMouseButton.Left) then
-        self.lastWindowX, self.lastWindowY = ImGui.GetWindowPos()
-        self.lastWindowHeight = ImGui.GetWindowHeight()
-        self.lastWindowWidth = ImGui.GetWindowWidth()
+    if not ImGui.IsMouseDown(ImGuiMouseButton.Left) and self.openGUI and self.shouldDrawGUI then
+        -- Only record the position when the window is actually drawn with a real size,
+        -- so a hidden/collapsed/not-yet-laid-out window can't overwrite the saved spot.
+        local x, y = ImGui.GetWindowPos()
+        local w, h = ImGui.GetWindowWidth(), ImGui.GetWindowHeight()
+        if w > 0 and h > 0 then
+            self.lastWindowX, self.lastWindowY = x, y
+            self.lastWindowHeight = h
+            self.lastWindowWidth = w
+        end
     end
 
     if self.openGUI and self.shouldDrawGUI then
@@ -297,6 +330,9 @@ function BMHotbarClass:RenderHotbar(flags)
     ImGui.End()
     ImGui.PopID()
 
+    if barColorPop > 0 then
+        ImGui.PopStyleColor(barColorPop)
+    end
     self:EndTheme(colorPop, stylePop)
 
     if self.openGUI ~= self:IsVisible() then
@@ -663,6 +699,62 @@ function BMHotbarClass:RenderTabContextMenu()
             }
 
             ImGui.Separator()
+            ImGui.Text("Background Opacity:")
+            local opacity, opacityChanged = ImGui.SliderFloat("##winOpacity_" .. self.id,
+                BMSettings:GetCharacterWindow(self.id).Opacity or 1.0, 0.0, 1.0, "%.2f")
+            if opacityChanged then
+                BMSettings:GetCharacterWindow(self.id).Opacity = opacity
+            end
+            if ImGui.IsItemDeactivatedAfterEdit() then
+                BMSettings:SaveSettings(true)
+            end
+
+            ImGui.Text("Button Opacity:")
+            local btnOpacity, btnOpacityChanged = ImGui.SliderFloat("##btnOpacity_" .. self.id,
+                BMSettings:GetCharacterWindow(self.id).ButtonOpacity or 1.0, 0.05, 1.0, "%.2f")
+            if btnOpacityChanged then
+                BMSettings:GetCharacterWindow(self.id).ButtonOpacity = btnOpacity
+                if BMSettings:GetCharacterWindow(self.id).LinkTextOpacity then
+                    BMSettings:GetCharacterWindow(self.id).TextOpacity = btnOpacity
+                end
+            end
+            if ImGui.IsItemDeactivatedAfterEdit() then
+                BMSettings:SaveSettings(true)
+            end
+
+            local linked, linkPressed = ImGui.Checkbox("Link Text to Button##linkOpacity_" .. self.id,
+                BMSettings:GetCharacterWindow(self.id).LinkTextOpacity or false)
+            if linkPressed then
+                BMSettings:GetCharacterWindow(self.id).LinkTextOpacity = linked
+                if linked then
+                    BMSettings:GetCharacterWindow(self.id).TextOpacity = BMSettings:GetCharacterWindow(self.id).ButtonOpacity
+                end
+                BMSettings:SaveSettings(true)
+            end
+
+            ImGui.Text("Text Opacity:")
+            ImGui.BeginDisabled(linked)
+            local txtOpacity, txtOpacityChanged = ImGui.SliderFloat("##txtOpacity_" .. self.id,
+                BMSettings:GetCharacterWindow(self.id).TextOpacity or 1.0, 0.0, 1.0, "%.2f")
+            if txtOpacityChanged then
+                BMSettings:GetCharacterWindow(self.id).TextOpacity = txtOpacity
+            end
+            if ImGui.IsItemDeactivatedAfterEdit() then
+                BMSettings:SaveSettings(true)
+            end
+            ImGui.EndDisabled()
+
+            ImGui.Text("Title Bar & Tabs Opacity:")
+            local barOpacity, barOpacityChanged = ImGui.SliderFloat("##barOpacity_" .. self.id,
+                BMSettings:GetCharacterWindow(self.id).TitleTabOpacity or 1.0, 0.0, 1.0, "%.2f")
+            if barOpacityChanged then
+                BMSettings:GetCharacterWindow(self.id).TitleTabOpacity = barOpacity
+            end
+            if ImGui.IsItemDeactivatedAfterEdit() then
+                BMSettings:SaveSettings(true)
+            end
+
+            ImGui.Separator()
             ImGui.Text("Window Name:")
             local titleTmp, titleChanged = ImGui.InputText("##winTitle_" .. self.id, self.windowTitleEdit, 0)
             if titleChanged then self.windowTitleEdit = titleTmp end
@@ -925,7 +1017,8 @@ function BMHotbarClass:RenderButtons(Set, searchText)
             end
             ImGui.PushID(buttonID)
             clicked = BMButtonHandlers.Render(button, btnSize, showLabel, (BMSettings:GetCharacterWindow(self.id).Font or 10) / 10,
-                BMSettings:GetCharacterWindow(self.id).AdvTooltips)
+                BMSettings:GetCharacterWindow(self.id).AdvTooltips, BMSettings:GetCharacterWindow(self.id).ButtonOpacity,
+                BMSettings:GetCharacterWindow(self.id).TextOpacity)
             ImGui.PopID()
             -- TODO Move this to button config class and out of the UI thread.
             if clicked then
@@ -1144,7 +1237,7 @@ function BMHotbarClass:GiveTime()
     local config = BMSettings:GetCharacterWindow(self.id)
 
     if config then
-        if self.setupComplete and not BMUpdateSettings then -- wont have valid positions until the render loop has run once.
+        if self.setupComplete and not BMUpdateSettings and (self.lastWindowWidth or 0) > 0 and (self.lastWindowHeight or 0) > 0 then -- wont have valid positions until the render loop has run once.
             if not config.Pos or (config.Pos.x ~= self.lastWindowX or config.Pos.y ~= self.lastWindowY) or config.Height ~= self.lastWindowHeight or config.Width ~= self.lastWindowWidth then
                 config.Pos    = config.Pos or {}
                 config.Pos.x  = self.lastWindowX
