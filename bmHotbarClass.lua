@@ -263,11 +263,21 @@ function BMHotbarClass:RenderHotbar(flags)
     end
 
     local colorPop, stylePop = self:StartTheme()
-    local windowTitle        = BMSettings:GetCharacterWindow(self.id).Title or string.format('Button Master - %d', self.id)
-    local renderName         = windowTitle
+    local config             = BMSettings:GetCharacterWindow(self.id)
+    local windowTitle        = config.Title or string.format('Button Master - %d', self.id)
+    local renderName         = windowTitle .. "###ButtonMaster_" .. tostring(self.id)
 
     if self:PerCharacterPositioning() then
-        renderName = windowTitle .. "##" .. mq.TLO.EverQuest.Server() .. "_" .. mq.TLO.Me.Name()
+        renderName = renderName .. "_" .. mq.TLO.EverQuest.Server() .. "_" .. mq.TLO.Me.Name()
+    end
+
+    if config.MigrateWindowId then
+        config.MigrateWindowId = nil
+        if config.Pos then
+            ImGui.SetNextWindowPos(config.Pos.x, config.Pos.y, ImGuiCond.Always)
+            ImGui.SetNextWindowSize(config.Width, config.Height, ImGuiCond.Always)
+        end
+        BMSettings:SaveSettings(false)
     end
 
     local bgOpacity = BMSettings:GetCharacterWindow(self.id).Opacity

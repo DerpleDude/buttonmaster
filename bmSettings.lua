@@ -13,7 +13,7 @@ BMSettings.CharConfig            = string.format("%s_%s", mq.TLO.EverQuest.Serve
 BMSettings.Constants             = {}
 
 BMSettings.Globals               = {}
-BMSettings.Globals.Version       = 7
+BMSettings.Globals.Version       = 8
 BMSettings.Globals.CustomThemes  = {}
 
 BMSettings.Constants.TimerTypes  = {
@@ -353,6 +353,27 @@ function BMSettings:ConvertToLatestConfigVersion()
         newSettings.Global.Font = nil
         newSettings.Global.ButtonSize = nil
         newSettings.Global = nil
+
+        if needsSave then
+            self.settings = newSettings
+            self:SaveSettings(true)
+            btnUtils.Output("\atUpgraded to \amv%d\at!", BMSettings.Globals.Version)
+        end
+    end
+
+    -- version 8
+    -- hotbar windows are now identified by ###ButtonMaster_<id> instead of their title
+    if (self.settings.Version or 0) < 8 then
+        mq.pickle(mq.configDir .. "/ButtonMaster-v7-" .. os.date("%m-%d-%y-%H-%M-%S") .. ".lua", self.settings)
+        needsSave = true
+        newSettings = self.settings
+        newSettings.Version = 8
+
+        for _, curCharData in pairs(newSettings.Characters or {}) do
+            for _, windowData in ipairs(curCharData.Windows or {}) do
+                windowData.MigrateWindowId = true
+            end
+        end
 
         if needsSave then
             self.settings = newSettings
