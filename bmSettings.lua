@@ -368,6 +368,26 @@ function BMSettings:InvalidateButtonCache()
     end
 end
 
+-- Older Delete Set left nil holes in window set lists, which hid every set after the hole.
+function BMSettings:CompactWindowSets()
+    for _, charConfig in pairs(self.settings.Characters or {}) do
+        for _, windowData in pairs(charConfig.Windows or {}) do
+            if type(windowData.Sets) == 'table' then
+                local keys = {}
+                for key, _ in pairs(windowData.Sets) do
+                    if type(key) == 'number' then table.insert(keys, key) end
+                end
+                table.sort(keys)
+                local compacted = {}
+                for _, key in ipairs(keys) do
+                    table.insert(compacted, windowData.Sets[key])
+                end
+                windowData.Sets = compacted
+            end
+        end
+    end
+end
+
 function BMSettings:LoadSettings()
     local config, err = loadfile(settings_path)
     if err or not config then
@@ -417,6 +437,8 @@ function BMSettings:LoadSettings()
 
     -- if we need to upgrade anyway then bail after the load.
     if self:NeedUpgrade() then return false end
+
+    self:CompactWindowSets()
 
     self.settings.Characters[self.CharConfig] = self.settings.Characters[self.CharConfig] or {}
     self.settings.Characters[self.CharConfig].Windows = self.settings.Characters[self.CharConfig].Windows or

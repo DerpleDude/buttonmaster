@@ -476,9 +476,11 @@ function BMHotbarClass:RenderTabContextMenu()
                     -- clean up any references to this set.
                     for charConfigKey, charConfigValue in pairs(BMSettings:GetSettings().Characters or {}) do
                         for windowKey, windowData in ipairs(charConfigValue.Windows or {}) do
-                            for setKey, setName in pairs(windowData.Sets or {}) do
-                                if setName == k then
-                                    BMSettings:GetSettings().Characters[charConfigKey].Windows[windowKey].Sets[setKey] = nil
+                            -- table.remove keeps the list without gaps; a nil hole hides every set after it.
+                            local sets = BMSettings:GetSettings().Characters[charConfigKey].Windows[windowKey].Sets or {}
+                            for setKey = #sets, 1, -1 do
+                                if sets[setKey] == k then
+                                    table.remove(sets, setKey)
                                 end
                             end
                         end
