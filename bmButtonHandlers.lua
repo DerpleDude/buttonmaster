@@ -113,7 +113,8 @@ end
 ---@param Button table # BMButtonConfig
 ---@param cursorScreenPos table # cursor position on screen
 ---@param size number # button size
-function BMButtonHandlers.RenderButtonCooldown(Button, cursorScreenPos, size)
+---@param opacity number # button opacity 0-1
+function BMButtonHandlers.RenderButtonCooldown(Button, cursorScreenPos, size, opacity)
     local currentTimer = BMButtonHandlers.GetTimeMS()
     local updateRate = Button.UpdateRate or 0
 
@@ -136,16 +137,17 @@ function BMButtonHandlers.RenderButtonCooldown(Button, cursorScreenPos, size)
     draw_list:PushClipRect(cursorScreenPos, ImVec2(cursorScreenPos.x + size, cursorScreenPos.y + size), true)
     draw_list:PathLineTo(center)
     draw_list:PathArcTo(center, size, start_angle, end_angle, 0)
-    draw_list:PathFillConvex(ImGui.GetColorU32(0.8, 0.02, 0.02, 0.75))
+    draw_list:PathFillConvex(ImGui.GetColorU32(0.8, 0.02, 0.02, 0.75 * opacity))
     draw_list:PopClipRect()
 end
 
 ---@param Button table # BMButtonConfig
 ---@param cursorScreenPos ImVec2 # cursor position on screen
 ---@param size number # button size
-function BMButtonHandlers.RenderButtonIcon(Button, cursorScreenPos, size)
+---@param opacity number # button opacity 0-1
+function BMButtonHandlers.RenderButtonIcon(Button, cursorScreenPos, size, opacity)
     if not Button.Icon and (not Button.IconLua or Button.IconLua:len() == 0) then
-        return BMButtonHandlers.RenderButtonRect(Button, cursorScreenPos, size, 255)
+        return BMButtonHandlers.RenderButtonRect(Button, cursorScreenPos, size, 255, opacity)
     end
 
     local draw_list = ImGui.GetWindowDrawList()
@@ -171,21 +173,31 @@ function BMButtonHandlers.RenderButtonIcon(Button, cursorScreenPos, size)
         animItems:SetTextureCell(tonumber(iconId) or 0)
     end
 
-    draw_list:AddTextureAnimation(renderIconAnim, cursorScreenPos, ImVec2(size, size))
+    if opacity >= 1 then
+        draw_list:AddTextureAnimation(renderIconAnim, cursorScreenPos, ImVec2(size, size))
+        return
+    end
+
+    -- the draw list version has no tint, so draw at the cursor with a faded tint and put the cursor back.
+    local tint = IM_COL32(255, 255, 255, math.floor(255 * opacity))
+    if tint >= 0x80000000 then tint = tint - 0x100000000 end
+    ImGui.DrawTextureAnimation(renderIconAnim, ImVec2(size, size), tint)
+    ImGui.SetCursorScreenPos(cursorScreenPos)
 end
 
 ---@param Button table # BMButtonConfig
 ---@param cursorScreenPos ImVec2 # cursor position on screen
 ---@param size number # button size
 ---@param alpha number # button alpha color
-function BMButtonHandlers.RenderButtonRect(Button, cursorScreenPos, size, alpha)
+---@param opacity number # button opacity 0-1
+function BMButtonHandlers.RenderButtonRect(Button, cursorScreenPos, size, alpha, opacity)
     local draw_list = ImGui.GetWindowDrawList()
     local buttonStyle = ImGui.GetStyleColorVec4(ImGuiCol.Button)
     local Colors = btnUtils.split(Button.ButtonColorRGB, ",")
     local buttonBGCol = IM_COL32(tonumber(Colors[1]) or math.floor(buttonStyle.x * 255),
         tonumber(Colors[2]) or math.floor(buttonStyle.y * 255),
         tonumber(Colors[3]) or math.floor(buttonStyle.z * 255),
-        #Colors == 0 and math.floor(buttonStyle.w * 255) or alpha)
+        math.floor((#Colors == 0 and buttonStyle.w * 255 or alpha) * opacity))
 
     draw_list:AddRectFilled(cursorScreenPos, ImVec2(cursorScreenPos.x + size, cursorScreenPos.y + size), buttonBGCol)
 end
@@ -220,9 +232,11 @@ end
 ---@param cursorScreenPos ImVec2 # cursor position on screen
 ---@param size number # button size
 ---@param label string
-function BMButtonHandlers.RenderButtonLabel(Button, cursorScreenPos, size, label)
+---@param opacity number # label opacity 0-1
+function BMButtonHandlers.RenderButtonLabel(Button, cursorScreenPos, size, label, opacity)
     local Colors = btnUtils.split(Button.TextColorRGB, ",")
-    local buttonLabelCol = IM_COL32(tonumber(Colors[1]) or 255, tonumber(Colors[2]) or 255, tonumber(Colors[3]) or 255, 255)
+    local buttonLabelCol = IM_COL32(tonumber(Colors[1]) or 255, tonumber(Colors[2]) or 255, tonumber(Colors[3]) or 255,
+        math.floor(255 * opacity))
     local draw_list = ImGui.GetWindowDrawList()
 
     BMButtonHandlers.CalcButtonTextPos(Button, size)
@@ -276,25 +290,28 @@ end
 ---@param renderLabel boolean # render the label on top or not
 ---@param fontScale number # Font scale for text
 ---@param advTooltips boolean # enable advanced tooltips6
+---@param opacity number? # button opacity 0-1, defaults to 1
+---@param textOpacity number? # label opacity 0-1, defaults to 1
 ---@return boolean # clicked
-function BMButtonHandlers.Render(Button, size, renderLabel, fontScale, advTooltips)
+function BMButtonHandlers.Render(Button, size, renderLabel, fontScale, advTooltips, opacity, textOpacity)
     local evaluatedLabel = BMButtonHandlers.ResolveButtonLabel(Button) or ""
     local clicked = false
     local startTimeMS = os.clock() * 1000
     local cursorScreenPos = ImGui.GetCursorScreenPosVec()
+    opacity = opacity or 1
 
-    BMButtonHandlers.RenderButtonIcon(Button, cursorScreenPos, size)
+    BMButtonHandlers.RenderButtonIcon(Button, cursorScreenPos, size, opacity)
     clicked = ImGui.Selectable('', false, ImGuiSelectableFlags.DontClosePopups, size, size)
     if ImGui.IsItemHovered() then
-        BMButtonHandlers.RenderButtonRect(Button, cursorScreenPos, size, 200)
+        BMButtonHandlers.RenderButtonRect(Button, cursorScreenPos, size, 200, opacity)
     end
 
-    BMButtonHandlers.RenderButtonCooldown(Button, cursorScreenPos, size)
+    BMButtonHandlers.RenderButtonCooldown(Button, cursorScreenPos, size, opacity)
 
     -- label and tooltip
     ImGui.SetWindowFontScale(fontScale)
     if renderLabel then
-        BMButtonHandlers.RenderButtonLabel(Button, cursorScreenPos, size, evaluatedLabel)
+        BMButtonHandlers.RenderButtonLabel(Button, cursorScreenPos, size, evaluatedLabel, textOpacity or 1)
     end
     BMButtonHandlers.RenderButtonTooltip(Button, evaluatedLabel, advTooltips and (Button.Cmd or nil) or nil)
     ImGui.SetWindowFontScale(1)
