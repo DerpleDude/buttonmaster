@@ -263,10 +263,10 @@ function BMHotbarClass:RenderHotbar(flags)
     end
 
     local colorPop, stylePop = self:StartTheme()
-    local windowTitle = BMSettings:GetCharacterWindow(self.id).Title or string.format('Button Master - %d', self.id)
+    local windowTitle        = BMSettings:GetCharacterWindow(self.id).Title or string.format('Button Master - %d', self.id)
     -- "###" gives ImGui a stable window ID that ignores the visible title, so renaming
     -- a window no longer creates a new ImGui window at the default position/size.
-    local renderName  = windowTitle .. "###ButtonMaster_" .. tostring(self.id)
+    local renderName         = windowTitle .. "###ButtonMaster_" .. tostring(self.id)
 
     if self:PerCharacterPositioning() then
         renderName = renderName .. "_" .. mq.TLO.EverQuest.Server() .. "_" .. mq.TLO.Me.Name()
